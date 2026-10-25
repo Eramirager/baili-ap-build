@@ -10,20 +10,20 @@ on:
     inputs:
       source_repo:
         description: '源码仓库 owner/repo'
-        default: 'padavanonly/immortalwrt-mt798x-6.6'
+        default: 'chasey-dev/immortalwrt-mt798x-rebase'
       source_branch:
         description: '源码分支(稳定分支, 不要填 master)'
-        default: 'openwrt-24.10-6.6'
+        default: '25.12'
       defconfig_path:
         description: 'defconfig 模板路径'
         default: 'defconfig/mt7986-ax6000.config'
       lan_ip:
-        description: 'AP 管理地址(最终模式必须与主路由同网段)'
-        default: '22.22.22.2'
+        description: 'AP 管理地址(设置模式填 192.168.2.1, 最终模式填 22.22.22.2)'
+        default: '192.168.2.1'
       enable_dhcp:
-        description: '首次设置模式: 开DHCP+免静态IP, 配置完刷最终模式再改'
+        description: '首次设置模式: 开DHCP+免静态IP, 配置完在LuCI里转正, 无需重编'
         type: boolean
-        default: false
+        default: true
       enable_ssh:
         description: '开启 tmate 调试(编译报错时再开)'
         type: boolean
