@@ -5,6 +5,7 @@
 # 手动重跑: sh /etc/uci-defaults/99-ap-mode && reboot
 # ============================================================
 
+SETUP_DHCP='0'             # CI 会替换: 1 = 首次设置模式(开DHCP), 0 = 最终模式(关DHCP)
 LAN_IP='192.168.66.2'      # CI 会替换成运行参数, 不要手改这一行
 LAN_MASK='255.255.255.0'
 GATEWAY="${LAN_IP%.*}.1"   # 主路由默认是同网段的 .1
@@ -23,9 +24,12 @@ uci set network.lan.dns="$DNS"
 uci set network.lan.delegate='0'
 uci commit network
 
-# ---- 3. 把 2.5G 口(wan)并入 br-lan ----
-# 百里是 1x2.5G + 4x1G, 做 AP 时 2.5G 口接交换机/主路由最合适。
-# 删掉 wan 接口后必须把它并进网桥, 否则这个口收不到任何二层流量。
+# ---- 3. 把 2.5G 口(eth1)并入 br-lan ----
+# 百里是 1x2.5G + 4x1G。2.5G 口不是交换机端口, 而是独立的 GMAC 口,
+# 在系统里叫 eth1 —— 板级配置里写的就是
+#   ucidef_set_interfaces_lan_wan "lan1 lan2 lan3 lan4" eth1
+# 它原本被分配给 wan 接口, 删掉 wan 之后必须手动并进网桥,
+# 否则这个口收不到任何二层流量, 插上没反应。
 # 只想用千兆口上联: 把下面 add_list 那一行注释掉即可。
 i=0
 while uci -q get "network.@device[$i]" >/dev/null; do
@@ -37,14 +41,30 @@ while uci -q get "network.@device[$i]" >/dev/null; do
 done
 uci commit network
 
-# ---- 4. 关掉本机 DHCP / RA / 无关服务 ----
+# ---- 4. DHCP / 无关服务 ----
+# 设置模式(SETUP_DHCP=1): AP 独立工作时保留 DHCP, 电脑连上 AP 的 WiFi
+#   自动获取 192.168.2.x 地址, 免去手动配静态 IP, 方便首次配置。
+# 最终模式(SETUP_DHCP=0): 关闭本机 DHCP / RA / 无关服务, AP 接入主路由后
+#   绝不能在自己网段外再发一套 DHCP, 否则会污染主路由整个网络!
 # 保留 firewall: 桥接转发的流量本来就不经过它, 但它能保护设备自身的
 # LuCI 与 SSH 不被下游设备随意访问。
-uci set dhcp.lan.ignore='1'
-uci commit dhcp
-for svc in dnsmasq odhcpd upnpd mwan3 ddns; do
-	/etc/init.d/$svc disable 2>/dev/null
-done
+if [ "$SETUP_DHCP" = '1' ]; then
+	uci -q delete dhcp.lan.ignore
+	# 只发 IP, 不下发网关(option 3)和 DNS(option 6):
+	# 此时 AP 没有上联, 若给计算机下发网关, Windows 会优先走有线默认路由,
+	# 计算机的上网(WiFi 主路由)就被这个空网关劫持断掉了。
+	# 不发网关/DNS 后, 计算机有线口仅用于访问 192.168.2.1, 上网照常走 WiFi。
+	# dnsmasq 语法: dhcp-option=3 / =6 无值表示"不下发该选项"。
+	uci -q add_list dhcp.lan.dhcp_option='3'
+	uci -q add_list dhcp.lan.dhcp_option='6'
+	uci commit dhcp
+else
+	uci set dhcp.lan.ignore='1'
+	uci commit dhcp
+	for svc in dnsmasq odhcpd upnpd mwan3 ddns; do
+		/etc/init.d/$svc disable 2>/dev/null
+	done
+fi
 
 # ---- 5. 时区 / NTP / 主机名 ----
 # 国内直连 pool.ntp.org 经常超时, 换成阿里云和国内池
@@ -67,6 +87,14 @@ for g in /sys/devices/system/cpu/cpufreq/policy*/scaling_governor; do
 done
 exit 0
 EOF
+
+# ---- 7. 默认主题 Fluent (支持中文) ----
+# 主题包由 CI 从 LazuliKao/luci-theme-fluent 拷入后一起编译,
+# 主题文件随镜像打包, 首次开机这里直接设为默认。
+if [ -d /www/luci-static/fluent ]; then
+	uci set luci.main.mediaurlbase='/luci-static/fluent'
+	uci commit luci
+fi
 
 exit 0
 
