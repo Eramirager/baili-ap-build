@@ -74,6 +74,7 @@ jobs:
           cd owrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+          sed -i 's/24\.10-SNAPSHOT/24.10.1/g' include/version.mk
 
       - name: '7 生成 AP 精简配置'
         run: |
