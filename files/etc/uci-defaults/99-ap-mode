@@ -1,0 +1,86 @@
+#!/bin/sh
+# ============================================================
+# 京东云百里 —— 纯无线接入点(AP) 首次启动默认配置
+# 由编译流程打进镜像的 files/ 目录, 仅首次开机执行一次
+# 手动重跑: sh /etc/uci-defaults/99-ap-mode && reboot
+# ============================================================
+
+LAN_IP='192.168.66.2'      # CI 会替换成运行参数, 不要手改这一行
+LAN_MASK='255.255.255.0'
+GATEWAY="${LAN_IP%.*}.1"   # 主路由默认是同网段的 .1
+DNS="$GATEWAY"
+
+# ---- 1. AP 不做路由, 删掉 WAN 的三层接口 ----
+uci -q delete network.wan
+uci -q delete network.wan6
+
+# ---- 2. LAN 静态地址, 网关与 DNS 指向主路由 ----
+uci set network.lan.proto='static'
+uci set network.lan.ipaddr="$LAN_IP"
+uci set network.lan.netmask="$LAN_MASK"
+uci set network.lan.gateway="$GATEWAY"
+uci set network.lan.dns="$DNS"
+uci set network.lan.delegate='0'
+uci commit network
+
+# ---- 3. 把 2.5G 口(wan)并入 br-lan ----
+# 百里是 1x2.5G + 4x1G, 做 AP 时 2.5G 口接交换机/主路由最合适。
+# 删掉 wan 接口后必须把它并进网桥, 否则这个口收不到任何二层流量。
+# 只想用千兆口上联: 把下面 add_list 那一行注释掉即可。
+i=0
+while uci -q get "network.@device[$i]" >/dev/null; do
+	if [ "$(uci -q get "network.@device[$i].name")" = "br-lan" ]; then
+		uci -q add_list "network.@device[$i].ports=wan"
+		break
+	fi
+	i=$((i + 1))
+done
+uci commit network
+
+# ---- 4. 关掉本机 DHCP / RA / 无关服务 ----
+# 保留 firewall: 桥接转发的流量本来就不经过它, 但它能保护设备自身的
+# LuCI 与 SSH 不被下游设备随意访问。
+uci set dhcp.lan.ignore='1'
+uci commit dhcp
+for svc in dnsmasq odhcpd upnpd mwan3 ddns; do
+	/etc/init.d/$svc disable 2>/dev/null
+done
+
+# ---- 5. 时区 / NTP / 主机名 ----
+# 国内直连 pool.ntp.org 经常超时, 换成阿里云和国内池
+uci set system.@system[0].timezone='CST-8'
+uci set system.@system[0].zonename='Asia/Shanghai'
+uci set system.@system[0].hostname='baili-ap'
+uci -q delete system.ntp.server
+uci add_list system.ntp.server='ntp.aliyun.com'
+uci add_list system.ntp.server='cn.pool.ntp.org'
+uci add_list system.ntp.server='time.cloudflare.com'
+uci commit system
+
+# ---- 6. CPU 锁定性能模式 ----
+# MT7986A 2GHz 在几十个终端并发时, schedutil 调频会让延迟出现尖峰。
+# 纯 AP 常在线, 锁 performance 更稳, 多出的几瓦功耗可以忽略。
+sed -i '/^exit 0$/d' /etc/rc.local 2>/dev/null
+cat >> /etc/rc.local <<'EOF'
+for g in /sys/devices/system/cpu/cpufreq/policy*/scaling_governor; do
+	[ -w "$g" ] && echo performance > "$g"
+done
+exit 0
+EOF
+
+exit 0
+
+# ============================================================
+# 无线部分无法用脚本预设: 闭源 mtwifi-cfg 与主线 mt76 的
+# /etc/config/wireless 结构不同, 写死会互相冲突。
+# 刷机后在 LuCI「网络 - 无线」或「MTK 无线设置」里按下表配:
+#
+# 5GHz    信道 149 固定 / 带宽 80MHz / 国家 CN / 功率 20dBm
+#         不要开 160MHz: 国内 160M 只能用 36-64, 全在 DFS 频段,
+#         雷达误检会强制切信道, 表现出来就是"打游戏突然卡一下"
+# 2.4GHz  信道 1 / 6 / 11 三选一 / 带宽锁 20MHz
+#         2.4G 开 40MHz 只会和邻居互相干扰, 不会更快
+# 漫游    开 802.11k + 802.11v + 802.11r(同 SSID 同密码)
+#         闭源驱动自带实现, 不要装 DAWN (它依赖 hostapd, 用不了)
+# 其它    若界面里有 IGMP Snooping 开关, 关掉, 老版本会引起组播异常
+# ============================================================
