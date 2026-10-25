@@ -1,0 +1,142 @@
+name: Build Baili AP Firmware
+
+# 京东云百里 (AX6000 / MT7986A / RE-CP-03 / RE-CS-05) 纯 AP 固件
+# 源码: padavanonly/immortalwrt-mt798x-6.6  稳定分支 openwrt-24.10-6.6
+# 无线: MTK 闭源 mt_wifi 驱动 + HNAT/WED 硬件加速
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_repo:
+        description: '源码仓库 owner/repo'
+        default: 'padavanonly/immortalwrt-mt798x-6.6'
+      source_branch:
+        description: '源码分支(稳定分支, 不要填 master)'
+        default: 'openwrt-24.10-6.6'
+      defconfig_path:
+        description: 'defconfig 模板路径'
+        default: 'defconfig/mt7986-ax6000.config'
+      lan_ip:
+        description: 'AP 管理地址(必须与主路由同网段)'
+        default: '22.22.22.2'
+      enable_ssh:
+        description: '开启 tmate 调试(编译报错时再开)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+
+    steps:
+      - name: '1 检出本仓库'
+        uses: actions/checkout@v4
+
+      - name: '2 释放磁盘空间'
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
+
+      - name: '3 安装编译依赖'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses5-dev libncursesw5-dev \
+            libssl-dev python3-distutils rsync unzip zlib1g-dev file wget qemu-utils \
+            ccache ecj fastjar java-propose-classpath libelf-dev python3 \
+            python3-setuptools swig time xsltproc
+
+      - name: '4 拉取源码'
+        run: |
+          git clone --depth 1 -b "${{ inputs.source_branch }}" \
+            "https://github.com/${{ inputs.source_repo }}.git" owrt
+
+      - name: '5 恢复 ccache 缓存'
+        uses: actions/cache@v4
+        with:
+          path: owrt/staging_dir/ccache
+          key: ccache-${{ inputs.source_repo }}-${{ inputs.source_branch }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ inputs.source_repo }}-${{ inputs.source_branch }}-
+
+      - name: '6 更新 feeds'
+        run: |
+          cd owrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: '7 生成 AP 精简配置'
+        run: |
+          cd owrt
+          mkdir -p files
+          cp -a ../files/. files/
+          chmod +x files/etc/uci-defaults/99-ap-mode
+          cp -f "${{ inputs.defconfig_path }}" .config
+          cat ../config/ap.config >> .config
+          sed -i "s/192.168.66.2/${{ inputs.lan_ip }}/g" files/etc/uci-defaults/99-ap-mode
+          make defconfig
+
+          if ! grep -q 'CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_jdcloud_re-cp-03=y' .config; then
+            echo "::error::设备 jdcloud_re-cp-03 未被选中, 停止编译"
+            grep -i jdcloud .config || true
+            exit 1
+          fi
+
+          echo "设备: $(grep -i 'jdcloud_re-cp-03' .config | head -n1)"
+          echo "内置软件包数量: $(grep -c '^CONFIG_PACKAGE_.*=y' .config)"
+
+      - name: '8 tmate 调试会话'
+        if: ${{ inputs.enable_ssh }}
+        uses: mxschmitt/action-tmate@v3
+        timeout-minutes: 60
+
+      - name: '9 预下载依赖源码'
+        run: |
+          cd owrt
+          make -j$(nproc) download || make -j$(nproc) download || make -j$(nproc) download
+
+      - name: '10 编译固件'
+        run: |
+          cd owrt
+          if ! make -j$(nproc) > ../build.log 2>&1; then
+            echo "===== 编译失败, 以下为最后 300 行日志 ====="
+            tail -n 300 ../build.log
+            exit 1
+          fi
+          tail -n 30 ../build.log
+
+      - name: '11 收集固件'
+        run: |
+          mkdir -p out
+          find owrt/bin/targets -type f $ -name '*sysupgrade*' -o -name '*initramfs*' $ -exec cp {} out/ \;
+          cp owrt/.config out/config.txt
+          cd out && sha256sum * > sha256sums.txt && ls -lh
+
+      - name: '12 上传构建产物'
+        uses: actions/upload-artifact@v4
+        with:
+          name: baili-ap-${{ github.run_number }}
+          path: out/*
+          retention-days: 15
+
+      - name: '13 发布 Release'
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: baili-ap-${{ github.run_number }}
+          name: 百里AP固件 #${{ github.run_number }}
+          body: |
+            源码: ${{ inputs.source_repo }}@${{ inputs.source_branch }}
+            设备: jdcloud_re-cp-03 (京东云百里 AX6000)
+            管理地址: ${{ inputs.lan_ip }}
+          files: out/*
