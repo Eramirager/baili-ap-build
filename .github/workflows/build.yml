@@ -1,7 +1,8 @@
 name: Build Baili AP Firmware
 
 # 京东云百里 (AX6000 / MT7986A / RE-CP-03 / RE-CS-05) 纯 AP 固件
-# 源码: padavanonly/immortalwrt-mt798x-6.6  稳定分支 openwrt-24.10-6.6
+# 支持源码: padavanonly/immortalwrt-mt798x-6.6 (openwrt-24.10-6.6 分支)
+#          chasey-dev/immortalwrt-mt798x-rebase (25.12 分支)
 # 无线: MTK 闭源 mt_wifi 驱动 + HNAT/WED 硬件加速
 
 on:
@@ -17,8 +18,12 @@ on:
         description: 'defconfig 模板路径'
         default: 'defconfig/mt7986-ax6000.config'
       lan_ip:
-        description: 'AP 管理地址(必须与主路由同网段)'
+        description: 'AP 管理地址(最终模式必须与主路由同网段)'
         default: '22.22.22.2'
+      enable_dhcp:
+        description: '首次设置模式: 开DHCP+免静态IP, 配置完刷最终模式再改'
+        type: boolean
+        default: false
       enable_ssh:
         description: '开启 tmate 调试(编译报错时再开)'
         type: boolean
@@ -74,7 +79,11 @@ jobs:
           cd owrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          sed -i 's/24\.10-SNAPSHOT/24.10.1/g' include/version.mk
+          # 把版本号里的 SNAPSHOT 尾巴去掉(只影响显示, 两个源码都兼容)
+          sed -i -e 's/24\.10-SNAPSHOT/24.10.1/g' -e 's/25\.12-SNAPSHOT/25.12/g' include/version.mk
+          # Fluent 主题: 不在任何 feed 里, 拷进 package/ 一起编译
+          git clone --depth 1 https://github.com/LazuliKao/luci-theme-fluent /tmp/luci-theme-fluent
+          cp -a /tmp/luci-theme-fluent/package/luci-theme-fluent package/
 
       - name: '7 生成 AP 精简配置'
         run: |
@@ -85,6 +94,9 @@ jobs:
           cp -f "${{ inputs.defconfig_path }}" .config
           cat ../config/ap.config >> .config
           sed -i "s/192.168.66.2/${{ inputs.lan_ip }}/g" files/etc/uci-defaults/99-ap-mode
+          if [ "${{ inputs.enable_dhcp }}" = "true" ]; then
+            sed -i "s/^SETUP_DHCP='0'/SETUP_DHCP='1'/" files/etc/uci-defaults/99-ap-mode
+          fi
           make defconfig
 
           if grep -q '^# CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_jdcloud_re-cp-03 is not set$' .config || ! grep -q '^CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_jdcloud_re-cp-03=y$' .config; then
@@ -142,4 +154,5 @@ jobs:
             源码: ${{ inputs.source_repo }}@${{ inputs.source_branch }}
             设备: jdcloud_re-cp-03 (京东云百里 AX6000)
             管理地址: ${{ inputs.lan_ip }}
+            首次设置模式(开DHCP): ${{ inputs.enable_dhcp }}
           files: out/*
