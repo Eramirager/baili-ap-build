@@ -30,7 +30,7 @@ uci commit network
 i=0
 while uci -q get "network.@device[$i]" >/dev/null; do
 	if [ "$(uci -q get "network.@device[$i].name")" = "br-lan" ]; then
-		uci -q add_list "network.@device[$i].ports=wan"
+		uci -q add_list "network.@device[$i].ports=eth1"
 		break
 	fi
 	i=$((i + 1))
