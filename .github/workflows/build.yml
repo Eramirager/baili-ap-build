@@ -93,7 +93,8 @@ jobs:
             exit 1
           fi
 
-          echo "设备: $(grep -i 'jdcloud_re-cp-03' .config | head -n1)"
+          echo "选中设备数: $(grep -c '^CONFIG_TARGET_DEVICE_.*DEVICE_.*=y$' .config) (正常应为 1)"
+          echo "设备: $(grep '^CONFIG_TARGET_DEVICE_.*DEVICE_.*=y$' .config | head -n1)"
           echo "内置软件包数量: $(grep -c '^CONFIG_PACKAGE_.*=y' .config)"
 
       - name: '8 tmate 调试会话'
