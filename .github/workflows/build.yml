@@ -87,7 +87,7 @@ jobs:
           sed -i "s/192.168.66.2/${{ inputs.lan_ip }}/g" files/etc/uci-defaults/99-ap-mode
           make defconfig
 
-          if ! grep -q 'CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_jdcloud_re-cp-03=y' .config; then
+          if grep -q '^# CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_jdcloud_re-cp-03 is not set$' .config || ! grep -q '^CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_jdcloud_re-cp-03=y$' .config; then
             echo "::error::设备 jdcloud_re-cp-03 未被选中, 停止编译"
             grep -i jdcloud .config || true
             exit 1
