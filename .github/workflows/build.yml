@@ -118,7 +118,8 @@ jobs:
       - name: '11 收集固件'
         run: |
           mkdir -p out
-          find owrt/bin/targets -type f $ -name '*sysupgrade*' -o -name '*initramfs*' $ -exec cp {} out/ \;
+          find owrt/bin/targets -type f -name '*sysupgrade*' -exec cp {} out/ \;
+          find owrt/bin/targets -type f -name '*initramfs*' -exec cp {} out/ \;
           cp owrt/.config out/config.txt
           cd out && sha256sum * > sha256sums.txt && ls -lh
 
